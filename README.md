@@ -32,7 +32,7 @@ The PSNR (dB) results of different methods on three datasets corrupted with synt
 and sigma = 5, 15, 25, 35 and 50. Best among each category (unsupervised or supervised) is in bold. Best among each
 subcategory is underlined
 
-![figure](results_psnr.png)
+<img width="1066" alt="results_psnr" src="https://user-images.githubusercontent.com/88136310/205091125-6dbbf47c-d639-4485-8a95-f649ccc44efa.png">
 
 
 ### Complexity
@@ -42,8 +42,7 @@ provided for information purposes only, as the implementation, the language used
 
 Running time (in seconds) of different methods on images of size 256x256. Run times are given on CPU and GPU if available.
 
-![figure](results_running_time.png)
-
+<img width="199" alt="results_running_time" src="https://user-images.githubusercontent.com/88136310/205091277-ebf81410-e5fd-46e4-bcaf-11709826ca7b.png">
 
 ## Acknowledgements
 
