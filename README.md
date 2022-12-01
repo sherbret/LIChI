@@ -42,7 +42,7 @@ provided for information purposes only, as the implementation, the language used
 
 Running time (in seconds) of different methods on images of size 256x256. Run times are given on CPU and GPU if available.
 
-![figure](results_running_time.png){width=30%}
+![figure](results_running_time.png)
 
 
 ## Acknowledgements
