@@ -42,7 +42,7 @@ provided for information purposes only, as the implementation, the language used
 
 Running time (in seconds) of different methods on images of size 256x256. Run times are given on CPU and GPU if available.
 
-<img width="199" alt="results_running_time" src="https://user-images.githubusercontent.com/88136310/205091277-ebf81410-e5fd-46e4-bcaf-11709826ca7b.png">
+<img width="300" alt="results_running_time" src="https://user-images.githubusercontent.com/88136310/205091277-ebf81410-e5fd-46e4-bcaf-11709826ca7b.png">
 
 ## Acknowledgements
 
