@@ -11,6 +11,7 @@ import torch.nn.functional as F
 class LIChI(nn.Module):
     def __init__(self):
         super(LIChI, self).__init__()
+        self.set_parameters()
         
     def set_parameters(self, sigma=25.0, constraints='affine', method='n2n',
                         p1=11, p2=6, k1=16, k2=64, w=65, s=3, M=9):
