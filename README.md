@@ -5,8 +5,8 @@ Sébastien Herbreteau and Charles Kervrann
 
 Here is the list of libraries you need to install to execute the code:
 * Python 3.8
-* Pytorch 1.12.0
-* Torchvision 0.13
+* Pytorch 2.0
+* Torchvision 0.15.1
 
 ## Install
 
@@ -24,6 +24,14 @@ To denoise an image with LIChI (remove ``--add_noise`` if it is already noisy):
 ```
 python ./demo.py --sigma 15 --add_noise --in ./test_images/cameraman.png --out ./denoised.png
 ```
+
+Or use directly the Pytorch class LIChI within your code:
+```
+m_lichi = LIChI() # instantiate the NL-Ridge class
+y = 15 * torch.randn(1, 1, 100, 100) # image of pure Gaussian noise with variance 15^2
+x_hat = m_lichi(y, sigma=15, constraints='affine', constraints='affine', method='n2n', p1=11, p2=6, k1=16, k2=64, w=65, s=3, M=9)
+```
+(see the meaning of the parameters in file nlridge.py, method set_parameters)
 
 ## Results
 
