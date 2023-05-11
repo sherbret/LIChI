@@ -23,17 +23,15 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 img = read_image(args.path_in)[None, :, :, :].float().to(device)
 img_noisy = img + args.sigma * torch.randn_like(img) if args.add_noise else img
 
-# Choice of the parameters 
-if args.sigma <= 10:
-    model = LIChI(9, 6, 16, 64, 65, 3, 6) 
-elif args.sigma <= 30:
-    model = LIChI(11, 6, 16, 64, 65, 3, 9) 
-else:
-    model = LIChI(13, 6, 16, 64, 65, 3, 11)
-
 # Denoising
+model = LIChI()
 t = time.time()
-den = model(img_noisy, args.sigma)
+if args.sigma <= 10:
+	den = model(img_noisy, sigma=args.sigma, constraints='affine', method='n2n', p1=9, p2=6, k1=16, k2=64, w=65, s=3, M=6)
+elif args.sigma <= 30:
+	den = model(img_noisy, sigma=args.sigma, constraints='affine', method='n2n', p1=11, p2=6, k1=16, k2=64, w=65, s=3, M=9)
+else:
+	den = model(img_noisy, sigma=args.sigma, constraints='affine', method='n2n', p1=13, p2=6, k1=16, k2=64, w=65, s=3, M=11)
 print("Time elapsed:", round(time.time() - t, 3), "seconds")
 den = den.clip(0, 255)
 
