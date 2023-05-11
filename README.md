@@ -31,7 +31,7 @@ m_lichi = LIChI() # instantiate the LIChI class
 y = 15 * torch.randn(1, 1, 100, 100) # image of pure Gaussian noise with variance 15^2
 x_hat = m_lichi(y, sigma=15, constraints='affine', method='n2n', p1=11, p2=6, k1=16, k2=64, w=65, s=3, M=9)
 ```
-(see the meaning of the parameters in file nlridge.py, method set_parameters)
+(see the meaning of the parameters in file lichi.py, method set_parameters)
 
 ## Results
 
