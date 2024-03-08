@@ -7,6 +7,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange, repeat
 
 class LIChI(nn.Module):
     def __init__(self):
@@ -30,10 +31,27 @@ class LIChI(nn.Module):
     def block_matching(input_x, k, p, w, s):
         if input_x.device == torch.device("cuda:0"): 
             input_x = input_x.half()
+            
+        def block_matching_aux(input_x, input_x_pad, k, p, v, s):
+            N, C, H, W = input_x.size() 
+            assert C == 1
+            w_large = 2*v + p
+            Href, Wref = -((H - p + 1) // -s), -((W - p + 1) // -s) # ceiling division, represents the number of reference patches along each axis for unfold with stride=s
+            ref_patches = F.unfold(input_x, p, stride=s)
+            ref_patches = rearrange(ref_patches, 'n (p1 p2) l -> (n l) 1 p1 p2', p1=p)
+            local_windows = F.unfold(input_x_pad, w_large, stride=s)
+            local_windows = rearrange(local_windows, 'n (p1 p2) l -> 1 (n l) p1 p2', p1=w_large)
+            scalar_product = F.conv2d(local_windows, ref_patches / p**2, groups=N*Href*Wref)
+            norm_patches = F.avg_pool2d(local_windows**2, p, stride=1)
+            distances = norm_patches - 2 * scalar_product # (up to a constant)
+            distances[:, :, v, v] = float('-inf') # the reference patch is always taken
+            distances = rearrange(distances, '1 (n h w) p1 p2 -> n h w (p1 p2)', n=N, h=Href, w=Wref)
+            indices = torch.topk(distances, k, dim=3, largest=False, sorted=False).indices # float('nan') is considered to be the highest value for topk 
+            return indices
 
         v = w // 2
         w_large = 2*v + p
-        input_x_pad = F.pad(input_x, [v]*4, mode='constant', value=float('inf'))
+        input_x_pad = F.pad(input_x, [v]*4, mode='constant', value=float('nan'))
         N, C, H, W = input_x.size() 
         Href, Wref = -((H - p + 1) // -s), -((W - p + 1) // -s) # ceiling division, represents the number of reference patches along each axis for unfold with stride=s
         ind_H_ref = torch.arange(0, H-p+1, step=s, device=input_x.device)      
@@ -42,24 +60,8 @@ class LIChI(nn.Module):
             ind_H_ref = torch.cat((ind_H_ref, torch.tensor([H - p], device=input_x.device)), dim=0)
         if (W - p + 1) % s != 1:
             ind_W_ref = torch.cat((ind_W_ref, torch.tensor([W - p], device=input_x.device)), dim=0)
-        ind_H_ref, ind_W_ref = ind_H_ref.view(1, -1, 1, 1), ind_W_ref.view(1, 1, -1, 1)
-        ind_H_ref, ind_W_ref = ind_H_ref.expand(N, -1, ind_W_ref.size(2), k), ind_W_ref.expand(N, ind_H_ref.size(1), -1, k)
-        
-        def block_matching_aux(input_x, input_x_pad, k, p, v, s):
-            N, C, H, W = input_x.size()
-            w_large = 2*v + p
-            Href, Wref = -((H - p + 1) // -s), -((W - p + 1) // -s) # ceiling division, represents the number of reference patches along each axis for unfold with stride=s
-            ref_patches = F.unfold(input_x, p, stride=s).transpose(1, 2).reshape(N*Href*Wref, 1, p, p)
-            local_windows = F.unfold(input_x_pad, w_large, stride=s).transpose(1, 2).reshape(1, N*Href*Wref, w_large, w_large)
-            scalar_product = F.conv2d(local_windows, ref_patches / p**2, groups=N*Href*Wref) # assumes that N = 1
-            norm_patches = F.avg_pool2d(local_windows**2, p, stride=1)
-            distances = torch.nan_to_num(norm_patches - 2 * scalar_product, nan=float('inf'))
-            distances[:, :, v, v] = -float('inf') # the reference patch is always taken
-            distances = distances.view(N, Href*Wref, -1)
-            indices = torch.topk(distances, k, dim=2, largest=False, sorted=False).indices.view(N, Href, Wref, k)
-            return indices
-
-        indices = torch.empty_like(ind_H_ref)
+            
+        indices = torch.empty(N, ind_H_ref.size(0), ind_W_ref.size(0), k, dtype=ind_H_ref.dtype, device=ind_H_ref.device)
         indices[:, :Href, :Wref, :] = block_matching_aux(input_x, input_x_pad, k, p, v, s)
         if (H - p + 1) % s != 1:
             indices[:, Href:, :Wref, :] = block_matching_aux(input_x[:, :, -p:, :], input_x_pad[:, :, -w_large:, :], k, p, v, s)
@@ -73,8 +75,29 @@ class LIChI(nn.Module):
         ind_col = torch.fmod(indices, 2*v+1) - v
         
         # from 2d to 1d representation of indices 
-        indices = ((ind_H_ref + ind_row) * (W-p+1) + (ind_W_ref + ind_col)).view(N, -1)
-        return indices
+        indices = (ind_row + rearrange(ind_H_ref, 'h -> 1 h 1 1')) * (W-p+1) + (ind_col + rearrange(ind_W_ref, 'w -> 1 1 w 1'))
+        return rearrange(indices, 'n h w k -> n (h w k)', n=N)
+    
+    @staticmethod 
+    def gather_groups(input_y, indices, k, p):
+        unfold_Y = F.unfold(input_y, p)
+        N, n, l = unfold_Y.shape
+        Y = torch.gather(unfold_Y, dim=2, index=repeat(indices, 'N l -> N n l', n=n))
+        return rearrange(Y, 'N n (l k) -> N l k n', k=k)
+    
+    @staticmethod 
+    def aggregate(X_hat, weights, indices, H, W, p):
+        N, _, _, n = X_hat.size()
+        X = rearrange(X_hat * weights, 'n l k p2 -> n p2 (l k)')
+        weights = repeat(weights, 'N l k 1 -> N n (l k)', n=n)
+        X_sum = torch.zeros(N, n, (H-p+1) * (W-p+1), dtype=X.dtype, device=X.device)
+        weights_sum = torch.zeros_like(X_sum)
+        
+        for i in range(N):
+            X_sum[i, :, :].index_add_(1, indices[i, :], X[i, :, :])
+            weights_sum[i, :, :].index_add_(1, indices[i, :], weights[i, :, :])
+ 
+        return F.fold(X_sum, (H, W), p) / F.fold(weights_sum, (H, W), p)
     
     def compute_theta(self, Q, D):
         N, B, k, _ = Q.size()
@@ -91,14 +114,7 @@ class LIChI(nn.Module):
         else:
             raise ValueError('constraints must be either linear, affine, conical or convex.')
         return theta.transpose(2,3)
-    
-    @staticmethod 
-    def gather_groups(input_y, indices, k, p):
-        unfold_y = F.unfold(input_y, p)
-        N, n, _ = unfold_y.size()
-        Y = torch.gather(unfold_y, dim=2, index=indices.view(N, 1, -1).expand(-1, n, -1)).transpose(1, 2).view(N, -1, k, n)
-        return Y
-
+        
     def denoise1(self, Y, sigma):
         N, B, k, n = Y.size()
         if self.method=='sure':
@@ -132,20 +148,6 @@ class LIChI(nn.Module):
         Z_hat = (1 - tau/t) * X_hat + tau/t * Z
         weights = 1 / torch.sum(xi**2, dim=3, keepdim=True).clip(min=1/k)
         return X_hat, Z_hat, weights
-
-    @staticmethod 
-    def aggregate(X_hat, weights, indices, H, W, p):
-        N, _, _, n = X_hat.size()
-        X = (X_hat * weights).permute(0, 3, 1, 2).view(N, n, -1)
-        weights = weights.view(N, 1, -1).expand(-1, n, -1)
-        X_sum = torch.zeros(N, n, (H-p+1) * (W-p+1), dtype=X.dtype, device=X.device)
-        weights_sum = torch.zeros_like(X_sum)
-        
-        for i in range(N):
-            X_sum[i, :, :].index_add_(1, indices[i, :], X[i, :, :])
-            weights_sum[i, :, :].index_add_(1, indices[i, :], weights[i, :, :])
- 
-        return F.fold(X_sum, (H, W), p) / F.fold(weights_sum, (H, W), p)
          
     def step1(self, input_y, sigma):
         _, _, H, W = input_y.size() 
