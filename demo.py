@@ -41,4 +41,4 @@ if args.add_noise:
     print("PSNR:", round(float(psnr), 2), "dB")
 
 # Writing
-write_png(den[0, :, :, :].byte(), args.path_out)
+write_png(den[0, :, :, :].byte().to("cpu"), args.path_out)
