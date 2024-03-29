@@ -29,20 +29,18 @@ class LIChI(nn.Module):
         
     @staticmethod
     def block_matching(input_x, k, p, w, s):
-        if input_x.device == torch.device("cuda:0"): 
-            input_x = input_x.half()
             
-        def block_matching_aux(input_x, input_x_pad, k, p, v, s):
-            N, C, H, W = input_x.size() 
+        def block_matching_aux(input_x_pad, k, p, v, s):
+            N, C, H, W = input_x_pad.size() 
             assert C == 1
-            w_large = 2*v + p
-            Href, Wref = -((H - p + 1) // -s), -((W - p + 1) // -s) # ceiling division, represents the number of reference patches along each axis for unfold with stride=s
-            ref_patches = F.unfold(input_x, p, stride=s)
-            ref_patches = rearrange(ref_patches, 'n (p1 p2) l -> (n l) 1 p1 p2', p1=p)
-            local_windows = F.unfold(input_x_pad, w_large, stride=s)
-            local_windows = rearrange(local_windows, 'n (p1 p2) l -> 1 (n l) p1 p2', p1=w_large)
-            scalar_product = F.conv2d(local_windows, ref_patches / p**2, groups=N*Href*Wref)
-            norm_patches = F.avg_pool2d(local_windows**2, p, stride=1)
+            Href, Wref = -((H - (2*v+p) + 1) // -s), -((W - (2*v+p) + 1) // -s) # ceiling division, represents the number of reference patches along each axis for unfold with stride=s
+            norm_patches = F.avg_pool2d(input_x_pad**2, p, stride=1)
+            norm_patches = F.unfold(norm_patches, 2*v+1, stride=s)
+            norm_patches = rearrange(norm_patches, 'n (p1 p2) l -> 1 (n l) p1 p2', p1=2*v+1)
+            local_windows = F.unfold(input_x_pad, 2*v+p, stride=s) / p
+            local_windows = rearrange(local_windows, 'n (p1 p2) l -> 1 (n l) p1 p2', p1=2*v+p)
+            ref_patches = rearrange(local_windows[..., v:-v, v:-v], '1 b p1 p2 -> b 1 p1 p2')
+            scalar_product = F.conv2d(local_windows, ref_patches, groups=N*Href*Wref)
             distances = norm_patches - 2 * scalar_product # (up to a constant)
             distances[:, :, v, v] = float('-inf') # the reference patch is always taken
             distances = rearrange(distances, '1 (n h w) p1 p2 -> n h w (p1 p2)', n=N, h=Href, w=Wref)
@@ -50,7 +48,6 @@ class LIChI(nn.Module):
             return indices
 
         v = w // 2
-        w_large = 2*v + p
         input_x_pad = F.pad(input_x, [v]*4, mode='constant', value=float('nan'))
         N, C, H, W = input_x.size() 
         Href, Wref = -((H - p + 1) // -s), -((W - p + 1) // -s) # ceiling division, represents the number of reference patches along each axis for unfold with stride=s
@@ -62,13 +59,13 @@ class LIChI(nn.Module):
             ind_W_ref = torch.cat((ind_W_ref, torch.tensor([W - p], device=input_x.device)), dim=0)
             
         indices = torch.empty(N, ind_H_ref.size(0), ind_W_ref.size(0), k, dtype=ind_H_ref.dtype, device=ind_H_ref.device)
-        indices[:, :Href, :Wref, :] = block_matching_aux(input_x, input_x_pad, k, p, v, s)
+        indices[:, :Href, :Wref, :] = block_matching_aux(input_x_pad, k, p, v, s)
         if (H - p + 1) % s != 1:
-            indices[:, Href:, :Wref, :] = block_matching_aux(input_x[:, :, -p:, :], input_x_pad[:, :, -w_large:, :], k, p, v, s)
+            indices[:, Href:, :Wref, :] = block_matching_aux(input_x_pad[:, :, -(2*v + p):, :], k, p, v, s)
         if (W - p + 1) % s != 1:
-            indices[:, :Href, Wref:, :] = block_matching_aux(input_x[:, :, :, -p:], input_x_pad[:, :, :, -w_large:], k, p, v, s)
+            indices[:, :Href, Wref:, :] = block_matching_aux(input_x_pad[:, :, :, -(2*v + p):], k, p, v, s)
             if (H - p + 1) % s != 1:
-                indices[:, Href:, Wref:, :] = block_matching_aux(input_x[:, :, -p:, -p:], input_x_pad[:, :, -w_large:, -w_large:], k, p, v, s)
+                indices[:, Href:, Wref:, :] = block_matching_aux(input_x_pad[:, :, -(2*v + p):, -(2*v + p):], k, p, v, s)
                 
         # (ind_row, ind_col) is a 2d-representation of indices
         ind_row = torch.div(indices, 2*v+1, rounding_mode='floor') - v
