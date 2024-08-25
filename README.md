@@ -1,4 +1,4 @@
-# Unsupervised Linear and Iterative Combinations of Patches for Image Denoising
+# Linear Combinations of Patches Are Unreasonably Effective for Single-Image Denoising (IEEE TIP'24)
 Sébastien Herbreteau and Charles Kervrann
 
 ## Requirements
@@ -57,3 +57,16 @@ Running time (in seconds) of different methods on images of size 256x256. Run ti
 ## Acknowledgements
 
 This work was supported by Bpifrance agency (funding) through the LiChIE contract. Computations  were performed on the Inria Rennes computing grid facilities partly funded by France-BioImaging infrastructure (French National Research Agency - ANR-10-INBS-04-07, “Investments for the future”).
+
+## Citation
+```BibTex
+@ARTICLE{10639330,
+  author={Herbreteau, Sébastien and Kervrann, Charles},
+  journal={IEEE Transactions on Image Processing}, 
+  title={Linear Combinations of Patches are Unreasonably Effective for Single-Image Denoising}, 
+  year={2024},
+  volume={33},
+  number={},
+  pages={4600-4613},
+  doi={10.1109/TIP.2024.3436651}}
+```
