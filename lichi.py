@@ -10,27 +10,63 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 
 class LIChI(nn.Module):
+    """ A PyTorch module implementing LIChI denoising algorithm. """
+    
     def __init__(self):
+        """ Initializes the LIChI module and sets default parameters. """
         super(LIChI, self).__init__()
         self.set_parameters()
         
     def set_parameters(self, sigma=25.0, constraints='affine', method='n2n',
                         p1=11, p2=6, k1=16, k2=64, w=65, s=3, M=9):
-        self.sigma = sigma # sigma parameter for Gaussian noise
-        self.p1 = p1 # patch size for step 1
-        self.p2 = p2 # patch size for step 2
-        self.k1 = k1 # group size for step 1
-        self.k2 = k2 # group size for step 2
-        self.M = M # number of iterations
-        self.window = w # size of the window centered around reference patches within which similar patches are searched (odd number)
-        self.step = s # moving step size from one reference patch to another
-        self.constraints = constraints # either 'linear' or 'affine'
-        self.method = method # either 'n2n', 'sure', 'avg' or 'noisy'
+        """
+        Sets the parameters for the denoising algorithm.
+        
+        Args:
+            sigma (float): Standard deviation of the Gaussian noise.
+            constraints (str): Type of constraints ('linear' or 'affine').
+            method (str): Denoising method ('n2n', 'sure', 'avg', or 'noisy').
+            p1 (int): Patch size for the first step.
+            p2 (int): Patch size for the second step.
+            k1 (int): Number of similar patches for the first step.
+            k2 (int): Number of similar patches for the second step.
+            w (int): Size of the search window (odd number).
+            s (int): Moving step size from one reference patch to another
+            M (int): Number of iterations.
+        """
+        for key, value in locals().items():
+            if key != "self": setattr(self, key, value)
         
     @staticmethod
     def block_matching(input_x, k, p, w, s):
+        """
+        Finds similar patches within a specified window around each reference patch.
+
+        Args:
+            input_x (torch.Tensor): Input image tensor of shape (N, C, H, W).
+            k (int): Number of most similar patches to find.
+            p (int): Patch size.
+            w (int): Search window size.
+            s (int): Stride for moving between reference patches.
+
+        Returns:
+            torch.Tensor: Indices of similar patches for each reference patch.
+        """
             
         def block_matching_aux(input_x_pad, k, p, v, s):
+            """
+            Auxiliary function to perform block matching in a padded input tensor.
+
+            Args:
+                input_x_pad (torch.Tensor): Padded input tensor.
+                k (int): Number of similar patches to find.
+                p (int): Patch size.
+                v (int): Half of the search window size.
+                s (int): Stride for moving between reference patches.
+
+            Returns:
+                torch.Tensor: Indices of similar patches for each reference patch.
+            """
             N, C, H, W = input_x_pad.size() 
             assert C == 1
             Href, Wref = -((H - (2*v+p) + 1) // -s), -((W - (2*v+p) + 1) // -s) # ceiling division, represents the number of reference patches along each axis for unfold with stride=s
@@ -77,6 +113,18 @@ class LIChI(nn.Module):
     
     @staticmethod 
     def gather_groups(input_y, indices, k, p):
+        """
+        Gathers groups of patches based on the indices from block matching.
+
+        Args:
+            input_y (torch.Tensor): Input image tensor of shape (N, C, H, W).
+            indices (torch.Tensor): Indices of similar patches.
+            k (int): Number of similar patches.
+            p (int): Patch size.
+
+        Returns:
+            torch.Tensor: Grouped patches.
+        """
         unfold_Y = F.unfold(input_y, p)
         N, n, l = unfold_Y.shape
         Y = torch.gather(unfold_Y, dim=2, index=repeat(indices, 'N l -> N n l', n=n))
@@ -84,6 +132,20 @@ class LIChI(nn.Module):
     
     @staticmethod 
     def aggregate(X_hat, weights, indices, H, W, p):
+        """
+        Aggregates groups of patches back into the image grid.
+
+        Args:
+            Y (torch.Tensor): Grouped patches.
+            indices (torch.Tensor): Indices of the patches in the original image.
+            H (int): Height of the original image.
+            W (int): Width of the original image.
+            k (int): Number of similar patches.
+            p (int): Patch size.
+
+        Returns:
+            torch.Tensor: Reconstructed image tensor.
+        """
         N, _, _, n = X_hat.size()
         X = rearrange(X_hat * weights, 'n l k p2 -> n p2 (l k)')
         weights = repeat(weights, 'N l k 1 -> N n (l k)', n=n)
@@ -97,6 +159,16 @@ class LIChI(nn.Module):
         return F.fold(X_sum, (H, W), p) / F.fold(weights_sum, (H, W), p)
     
     def compute_theta(self, Q, D):
+        """
+        Computes the theta matrix based on the provided constraints.
+    
+        Args:
+            Q (torch.Tensor): Q matrix, shape (N, B, k, k).
+            D (torch.Tensor): Diagonal matrix, shape (1, 1, k).
+    
+        Returns:
+            torch.Tensor: Theta matrix, shape (N, B, k, k).
+        """
         N, B, k, _ = Q.size()
         if self.constraints == 'linear' or self.constraints == 'affine':
             Ik = torch.eye(k, dtype=Q.dtype, device=Q.device).expand(N, B, -1, -1)
@@ -113,6 +185,18 @@ class LIChI(nn.Module):
         return theta.transpose(2,3)
         
     def denoise1(self, Y, sigma):
+        """
+        Denoises each group of similar patches (step 1).
+    
+        Args:
+            Y (torch.Tensor): Grouped patches tensor, shape (N, B, k, n).
+            sigma (float): Noise standard deviation.
+    
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: 
+                X_hat: Denoised patches, shape (N, B, k, n).
+                weights: Patch weights, shape (N, B, k, 1).
+        """
         N, B, k, n = Y.size()
         if self.method=='sure':
             D = n * sigma**2 * torch.ones(1, 1, k, dtype=Y.dtype, device=Y.device)
@@ -135,6 +219,22 @@ class LIChI(nn.Module):
         return X_hat, weights
 
     def denoise2(self, Z, X, Y, sigma, tau):
+        """
+        Denoises each group of similar patches (step 2).
+    
+        Args:
+            Z (torch.Tensor): Input noisy patches, shape (N, B, k, n).
+            X (torch.Tensor): Previous estimate of denoised patches, shape (N, B, k, n).
+            Y (torch.Tensor): Original patches, shape (N, B, k, n).
+            sigma (float): Noise standard deviation.
+            tau (float): Tau parameter.
+    
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: 
+                X_hat: Refined estimate of denoised patches, shape (N, B, k, n).
+                Z_hat: Updated patches with adaptive weighting, shape (N, B, k, n).
+                weights: Patch weights, shape (N, B, k, 1).
+        """
         N, B, k, n = Z.size()
         t = 1 - torch.std(Y - Z, dim=(2,3), keepdim=True, unbiased=False) / sigma
         t = t.clip(min=tau+1e-6)
@@ -147,8 +247,18 @@ class LIChI(nn.Module):
         return X_hat, Z_hat, weights
          
     def step1(self, input_y, sigma):
+        """
+        Performs the first denoising step on the input image.
+    
+        Args:
+            input_y (torch.Tensor): Noisy input image, shape (N, C, H, W).
+            sigma (float): Noise standard deviation.
+    
+        Returns:
+            torch.Tensor: First-stage denoised image, shape (N, C, H, W).
+        """
         _, _, H, W = input_y.size() 
-        k, p, w, s = self.k1, self.p1, self.window, self.step
+        k, p, w, s = self.k1, self.p1, self.w, self.s
         y_mean = torch.mean(input_y, dim=1, keepdim=True) # for color
         indices = self.block_matching(y_mean, k, p, w, s)
         Y = self.gather_groups(input_y, indices, k, p)
@@ -157,8 +267,25 @@ class LIChI(nn.Module):
         return x_hat
 
     def step2(self, input_z, input_x, input_y, sigma, tau, indices=None):
+        """
+        Performs the second denoising step with refined patch estimates.
+    
+        Args:
+            input_z (torch.Tensor): Previous noisy estimate, shape (N, C, H, W).
+            input_x (torch.Tensor): Previous denoised estimate, shape (N, C, H, W).
+            input_y (torch.Tensor): Original noisy input image, shape (N, C, H, W).
+            sigma (float): Noise standard deviation.
+            tau (float): Tau parameter.
+            indices (torch.Tensor, optional): Patch indices, default is None.
+    
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: 
+                x_hat: Refined denoised image, shape (N, C, H, W).
+                z_hat: Updated noisy estimate, shape (N, C, H, W).
+                indices: Patch indices used, shape (N, L).
+        """
         N, C, H, W = input_y.size() 
-        k, p, w, s = self.k2, self.p2, self.window, self.step
+        k, p, w, s = self.k2, self.p2, self.w, self.s
         z_block = torch.mean(input_z, dim=1, keepdim=True) # for color
         if indices is None: indices = self.block_matching(z_block, k, p, w, s)
         X = self.gather_groups(input_x, indices, k, p)
@@ -171,6 +298,25 @@ class LIChI(nn.Module):
     
     def forward(self, y, sigma=25.0, constraints='affine', method='n2n',
                 p1=11, p2=6, k1=16, k2=64, w=65, s=3, M=9):
+        """
+        Executes the full denoising process on the input image.
+    
+        Args:
+            y (torch.Tensor): Noisy input image, shape (N, C, H, W).
+            sigma (float): Standard deviation of the Gaussian noise.
+            constraints (str): Type of constraints ('linear' or 'affine').
+            method (str): Denoising method ('n2n', 'sure', 'avg', or 'noisy').
+            p1 (int): Patch size for the first step.
+            p2 (int): Patch size for the second step.
+            k1 (int): Number of similar patches for the first step.
+            k2 (int): Number of similar patches for the second step.
+            w (int): Size of the search window (odd number).
+            s (int): Moving step size from one reference patch to another
+            M (int): Number of iterations.
+    
+        Returns:
+            torch.Tensor: Final denoised image, shape (N, C, H, W).
+        """
         self.set_parameters(sigma, constraints, method, p1, p2, k1, k2, w, s, M)
         z, x  = y, self.step1(y, sigma) # first pilot
         for m in range(self.M):
