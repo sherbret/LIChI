@@ -136,11 +136,11 @@ class LIChI(nn.Module):
         Aggregates groups of patches back into the image grid.
 
         Args:
-            Y (torch.Tensor): Grouped patches.
+            X_hat (torch.Tensor): Grouped denoised patches.
+            weights (torch.Tensor): Weights of each patch.
             indices (torch.Tensor): Indices of the patches in the original image.
             H (int): Height of the original image.
             W (int): Width of the original image.
-            k (int): Number of similar patches.
             p (int): Patch size.
 
         Returns:
